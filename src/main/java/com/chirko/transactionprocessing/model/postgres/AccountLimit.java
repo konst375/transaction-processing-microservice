@@ -1,4 +1,4 @@
-package com.chirko.transactionprocessing.model;
+package com.chirko.transactionprocessing.model.postgres;
 
 import com.chirko.transactionprocessing.model.emuns.ExpenseCategory;
 import jakarta.persistence.*;
@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 public class AccountLimit extends AbstractEntity {
 
     @ManyToOne
+    @JoinColumn(name = "account")
     private Account account;
 
     @Enumerated(EnumType.STRING)
