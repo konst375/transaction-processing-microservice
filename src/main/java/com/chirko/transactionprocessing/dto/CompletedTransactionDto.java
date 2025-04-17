@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 
 public record CompletedTransactionDto(
+        int id,
         int accountFrom,
         int accountTo,
         String currencyShortname,

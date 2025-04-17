@@ -1,4 +1,4 @@
-package com.chirko.transactionprocessing.model;
+package com.chirko.transactionprocessing.model.postgres;
 
 import com.chirko.transactionprocessing.model.emuns.ExpenseCategory;
 import jakarta.persistence.*;
@@ -25,10 +25,11 @@ public class TransactionalOperation extends AbstractEntity {
     @Column(nullable = false)
     private ExpenseCategory expenseCategory;
 
-    @Builder.Default
     @Column(precision = 18, scale = 2, nullable = false)
-    private BigDecimal sum = BigDecimal.valueOf(0);
+    private BigDecimal sum;
 
     @Builder.Default
     private boolean limitExceeded = false;
+
+    private BigDecimal remainingMonthlyLimit;
 }

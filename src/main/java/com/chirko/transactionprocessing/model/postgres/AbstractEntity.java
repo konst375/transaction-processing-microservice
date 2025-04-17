@@ -1,4 +1,4 @@
-package com.chirko.transactionprocessing.model;
+package com.chirko.transactionprocessing.model.postgres;
 
 import com.chirko.transactionprocessing.model.emuns.CurrencyShortname;
 import jakarta.persistence.*;
