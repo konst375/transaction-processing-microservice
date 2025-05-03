@@ -13,13 +13,20 @@ import java.math.BigDecimal;
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(callSuper = true)
 public class TransactionalOperation extends AbstractEntity {
 
     @ManyToOne
+    @JoinColumn(name = "account_to")
+    private Account accountTo;
+
+    @ManyToOne
+    @JoinColumn(name = "account_from")
     private Account accountFrom;
 
     @ManyToOne
-    private Account accountTo;
+    @JoinColumn(name = "corresponding_limit")
+    private AccountLimit limit;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

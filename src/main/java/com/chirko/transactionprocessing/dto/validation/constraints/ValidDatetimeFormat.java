@@ -1,6 +1,6 @@
 package com.chirko.transactionprocessing.dto.validation.constraints;
 
-import com.chirko.transactionprocessing.dto.validation.validators.DateValidator;
+import com.chirko.transactionprocessing.dto.validation.validators.DatetimeValidator;
 import jakarta.validation.Constraint;
 import jakarta.validation.Payload;
 
@@ -14,8 +14,9 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 @Target({TYPE, FIELD, ANNOTATION_TYPE})
 @Retention(RUNTIME)
 @Documented
-@Constraint(validatedBy = DateValidator.class)
-public @interface ValidDate {
+@Constraint(validatedBy = DatetimeValidator.class)
+public @interface ValidDatetimeFormat {
+
     String message() default "";
 
     Class<?>[] groups() default {};

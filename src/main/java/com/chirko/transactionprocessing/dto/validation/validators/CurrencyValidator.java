@@ -11,8 +11,15 @@ public class CurrencyValidator implements ConstraintValidator<AcceptableCurrency
 
     @Override
     public boolean isValid(String value, ConstraintValidatorContext context) {
-        return Arrays.stream(CurrencyShortname.values())
+        final boolean isValid = Arrays.stream(CurrencyShortname.values())
                 .map(CurrencyShortname::name)
                 .anyMatch(t -> t.equalsIgnoreCase(value));
+        if (!isValid) {
+            final String message = String.format("Unacceptable currency: %s", value);
+            context.buildConstraintViolationWithTemplate(message)
+                    .addPropertyNode("currency_shortname")
+                    .addConstraintViolation();
+        }
+        return isValid;
     }
 }

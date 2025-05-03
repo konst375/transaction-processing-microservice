@@ -13,7 +13,10 @@ import java.math.BigDecimal;
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(callSuper = true)
 public class AccountLimit extends AbstractEntity {
+
+    private static final BigDecimal DEFAULT_LIMIT_SUM = BigDecimal.valueOf(1000);
 
     @ManyToOne
     @JoinColumn(name = "account")
@@ -25,6 +28,5 @@ public class AccountLimit extends AbstractEntity {
 
     @Builder.Default
     @Column(precision = 18, scale = 2, nullable = false)
-    private BigDecimal sum = BigDecimal.valueOf(1000);
-
+    private BigDecimal sum = DEFAULT_LIMIT_SUM;
 }

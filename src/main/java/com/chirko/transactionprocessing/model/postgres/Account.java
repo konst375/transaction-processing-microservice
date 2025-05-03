@@ -7,7 +7,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
-import java.sql.Timestamp;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -17,6 +17,7 @@ import java.util.Map;
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
+@EqualsAndHashCode(callSuper = true)
 public class Account extends AbstractEntity {
 
     @Builder.Default
@@ -29,14 +30,14 @@ public class Account extends AbstractEntity {
     @OneToMany(mappedBy = "accountTo")
     private List<TransactionalOperation> incomeTransactions;
 
-    @OneToMany(mappedBy = "account", fetch = FetchType.EAGER)
+    @OneToMany(mappedBy = "account", fetch = FetchType.EAGER, cascade = CascadeType.ALL)
     @MapKeyColumn(name = "expenseCategory")
     @MapKeyEnumerated(EnumType.STRING)
     private Map<ExpenseCategory, AccountLimit> accountLimits;
 
     @UpdateTimestamp
     @Column(nullable = false)
-    private Timestamp updatedDatetime;
+    private OffsetDateTime updatedDatetime;
 
     public AccountLimit getRemainingLimitForCategory(ExpenseCategory expenseCategory) {
         return accountLimits.get(expenseCategory);
