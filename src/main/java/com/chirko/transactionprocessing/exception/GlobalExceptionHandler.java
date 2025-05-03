@@ -4,55 +4,84 @@ import com.chirko.transactionprocessing.dto.TransactionProcessingExceptionDto;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.sql.Timestamp;
-import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.Objects;
+
+import static com.chirko.transactionprocessing.exception.ErrorCode.INVALID_DATA_SUBMITTED;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, List<String>>> handleValidationErrors(HttpServletRequest request, MethodArgumentNotValidException e) {
-        logger.warn(e.getAllErrors().toString());
-        final List<String> errors = e.getBindingResult()
+    public ResponseEntity<TransactionProcessingExceptionDto> handleValidationErrors(
+            HttpServletRequest request, MethodArgumentNotValidException exception) {
+        final List<String> errors = exception.getBindingResult()
                 .getFieldErrors()
                 .stream()
                 .map(FieldError::getDefaultMessage)
-                .collect(Collectors.toList());
-        final Map<String, List<String>> errorsMap = getErrorsMap(errors);
-        return new ResponseEntity<>(errorsMap, new HttpHeaders(), HttpStatus.BAD_REQUEST);
+                .filter(Objects::nonNull)
+                .filter(message -> !message.isBlank())
+                .toList();
+        final StringBuilder messageBuilder = new StringBuilder();
+        for (int i = 0; i < errors.size(); i++) {
+            messageBuilder.append(errors.get(i));
+            if (i != errors.size() - 1) {
+                messageBuilder.append("; ");
+            }
+        }
+
+        final TransactionProcessingExceptionDto exceptionDto = TransactionProcessingExceptionDto.builder()
+                .datetime(OffsetDateTime.now())
+                .errorCode(INVALID_DATA_SUBMITTED.getCode())
+                .message(INVALID_DATA_SUBMITTED.getFormat() + messageBuilder)
+                .statusCode(INVALID_DATA_SUBMITTED.getHttpStatus().value())
+                .httpStatus(INVALID_DATA_SUBMITTED.getHttpStatus())
+                .exception(exception.getClass().getName())
+                .path(request.getRequestURI())
+                .build();
+
+        final ResponseEntity<TransactionProcessingExceptionDto> response =
+                new ResponseEntity<>(exceptionDto, exceptionDto.httpStatus());
+
+        logger.error("""
+                        Submitted data validation exception caught:
+                        errors: {},
+                        response: {}""",
+                exception.getAllErrors(), response);
+        return response;
     }
 
     @ExceptionHandler(TransactionProcessingException.class)
-    public ResponseEntity<TransactionProcessingExceptionDto> handleTransactionProcessingException(HttpServletRequest request, TransactionProcessingException e) {
-        logger.warn(e.toString());
-        TransactionProcessingExceptionDto exceptionDto = new TransactionProcessingExceptionDto(
-                Timestamp.valueOf(LocalDateTime.now()),
-                e.getErrorCode().getCode(),
-                e.getMessage(),
-                e.getErrorCode().getHttpStatus().value(),
-                e.getErrorCode().getHttpStatus(),
-                e.getErrorCode().getHttpStatus().getReasonPhrase(),
-                request.getRequestURI());
-        return new ResponseEntity<>(exceptionDto, e.getErrorCode().getHttpStatus());
-    }
+    public ResponseEntity<TransactionProcessingExceptionDto> handleTransactionProcessingException(
+            HttpServletRequest request, TransactionProcessingException exception) {
+        final TransactionProcessingExceptionDto exceptionDto = TransactionProcessingExceptionDto.builder()
+                .datetime(OffsetDateTime.now())
+                .errorCode(exception.getErrorCode().getCode())
+                .message(exception.getMessage())
+                .statusCode(exception.getErrorCode().getHttpStatus().value())
+                .httpStatus(exception.getErrorCode().getHttpStatus())
+                .exception(exception.getClass().getName())
+                .path(request.getRequestURI())
+                .build();
 
-    private Map<String, List<String>> getErrorsMap(List<String> errors) {
-        Map<String, List<String>> errorResponse = new HashMap<>();
-        errorResponse.put("errors", errors);
-        return errorResponse;
+        final ResponseEntity<TransactionProcessingExceptionDto> response =
+                new ResponseEntity<>(exceptionDto, exception.getErrorCode().getHttpStatus());
+
+        logger.error("""
+                        Exception caught:
+                        exception: {},
+                        exceptionDto: {},
+                        response: {}""",
+                exception, exceptionDto, response);
+        return response;
     }
 }
