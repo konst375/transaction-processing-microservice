@@ -48,38 +48,58 @@ public class TransactionalOperationService {
 
         // Counting sum in the target currency
         final CurrencyShortname paymentCurrency = CurrencyShortname.valueOf(requestDto.currencyShortname());
+        final BigDecimal paymentSum = requestDto.sum();
         final BigDecimal paymentRate = exchangeRateService.getExchangeRate(paymentCurrency, defaultCurrency);
-        final BigDecimal targetSum = requestDto.sum().multiply(paymentRate);
+        final BigDecimal paymentSumInDefaultCurrency = paymentSum.multiply(paymentRate);
 
-        // Obtaining account payment info and counting balance in default currency
-        final BigDecimal balanceFrom = accountFrom.getBalance();
-        final CurrencyShortname accountCurrency = accountFrom.getCurrencyShortname();
-        final BigDecimal balanceRate = exchangeRateService.getExchangeRate(accountCurrency, defaultCurrency);
-        final BigDecimal balanceFromInTargetCurrency = accountCurrency.equals(defaultCurrency)
-                ? balanceFrom
-                : balanceFrom.multiply(balanceRate);
+        // Processing payment
+        final BigDecimal accountFromBalance = accountFrom.getBalance();
+        final CurrencyShortname accountFromCurrency = accountFrom.getCurrencyShortname();
+
+        BigDecimal updatedBalanceFrom;
+        if (accountFromCurrency.equals(paymentCurrency)) {
+            if (accountFromBalance.compareTo(paymentSum) < 0) {
+                throw new TransactionProcessingException(ErrorCode.INSUFFICIENT_FUNDS,
+                        requestDto.accountFrom(), OffsetDateTime.now(), paymentSum);
+            } else {
+                updatedBalanceFrom = accountFromBalance.subtract(paymentSum);
+            }
+        } else {
+            final BigDecimal balanceFromRate = exchangeRateService.getExchangeRate(accountFromCurrency, defaultCurrency);
+            final BigDecimal paymentSumInAccountFromCurrency = paymentSumInDefaultCurrency.divide(balanceFromRate,
+                    RoundingMode.HALF_EVEN);
+
+            if (accountFromBalance.compareTo(paymentSumInAccountFromCurrency) < 0) {
+                throw new TransactionProcessingException(ErrorCode.INSUFFICIENT_FUNDS,
+                        requestDto.accountFrom(), OffsetDateTime.now(), paymentSum);
+            } else {
+                updatedBalanceFrom = accountFromBalance.subtract(paymentSumInAccountFromCurrency);
+            }
+        }
+
+        final CurrencyShortname accountToCurrency = accountTo.getCurrencyShortname();
+
+        BigDecimal updatedBalanceTo;
+        if (accountToCurrency.equals(paymentCurrency)) {
+            updatedBalanceTo = accountTo.getBalance()
+                    .add(paymentSum)
+                    .setScale(2, RoundingMode.HALF_EVEN);
+        } else {
+            final BigDecimal paymentSumInAccountToCurrency = paymentSumInDefaultCurrency.divide(
+                    exchangeRateService.getExchangeRate(accountToCurrency, defaultCurrency), RoundingMode.HALF_EVEN);
+            updatedBalanceTo = accountTo.getBalance().add(paymentSumInAccountToCurrency);
+        }
+
+        accountService.updateAccountsBalances(accountFrom, updatedBalanceFrom, accountTo, updatedBalanceTo);
 
         // Parse custom timestamp format
         final OffsetDateTime datetime = requestDto.datetimePair().datetime();
 
-
-        // Checking if there are enough funds
-        if (balanceFromInTargetCurrency.compareTo(targetSum) < 0) {
-            throw new TransactionProcessingException(ErrorCode.INSUFFICIENT_FUNDS,
-                    requestDto.accountFrom(), OffsetDateTime.now(), requestDto.sum());
-        }
-
-        // Processing money transfer
-        final BigDecimal updatedBalanceFrom = balanceFrom.subtract(targetSum).setScale(2, RoundingMode.HALF_EVEN);
-        final BigDecimal updatedBalanceTo = accountTo.getBalance().add(targetSum).setScale(2, RoundingMode.HALF_EVEN);
-        accountService.updateAccountsBalances(accountFrom, updatedBalanceFrom, accountTo, updatedBalanceTo);
-
-        final ExpenseCategory expenseCategory = ExpenseCategory.valueOf(requestDto.expenseCategory().toUpperCase());
-
         // Checking if limit exceeded
+        final ExpenseCategory expenseCategory = ExpenseCategory.valueOf(requestDto.expenseCategory().toUpperCase());
         final LimitExceededCheckResult limitExceededCheckResult =
-                checkIfLimitExceeded(expenseCategory, datetime, accountFrom, targetSum);
-        final AccountLimit limit = limitExceededCheckResult.categoryLimit();
+                checkIfLimitExceeded(expenseCategory, datetime, accountFrom, paymentSumInDefaultCurrency);
+        final AccountLimit limit = limitExceededCheckResult.limit();
 
         final TransactionalOperation transactionalOperationToPersist = TransactionalOperation.builder()
                 .currencyShortname(paymentCurrency)
@@ -87,9 +107,9 @@ public class TransactionalOperationService {
                 .accountFrom(accountFrom)
                 .accountTo(accountTo)
                 .expenseCategory(expenseCategory)
-                .sum(targetSum)
+                .sum(paymentSumInDefaultCurrency)
                 .limitExceeded(limitExceededCheckResult.limitExceeded())
-                .remainingMonthlyLimit(limitExceededCheckResult.remainingLimitAfterPayment())
+                .remainingMonthlyLimit(limitExceededCheckResult.remains())
                 .limit(limit)
                 .build();
 
@@ -98,12 +118,12 @@ public class TransactionalOperationService {
         return mapper.completedTransactionDtoFrom(savedTransaction);
     }
 
-    private LimitExceededCheckResult checkIfLimitExceeded(ExpenseCategory expenseCategory, OffsetDateTime offsetDateTime,
-                                                          Account accountFrom, BigDecimal targetSum) {
+    LimitExceededCheckResult checkIfLimitExceeded(ExpenseCategory expenseCategory, OffsetDateTime datetime,
+                                                  Account accountFrom, BigDecimal targetSum) {
 
         // Looking for last transaction in category
         final Optional<TransactionalOperation> lastTransactionInCategory = transactionalOperationRepository
-                .findLastThisMonthInCategory(accountFrom.getId(), expenseCategory.name(), offsetDateTime);
+                .findLastThisMonthInCategory(accountFrom.getId(), expenseCategory.name(), datetime);
 
         final AccountLimit categoryLimit = accountFrom.getRemainingLimitForCategory(expenseCategory);
 
@@ -135,9 +155,9 @@ public class TransactionalOperationService {
                 .toList();
     }
 
-    private record LimitExceededCheckResult(
-            AccountLimit categoryLimit,
-            BigDecimal remainingLimitAfterPayment,
+    record LimitExceededCheckResult(
+            AccountLimit limit,
+            BigDecimal remains,
             boolean limitExceeded
     ) {
     }

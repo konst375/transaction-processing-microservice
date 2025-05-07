@@ -8,9 +8,11 @@ import com.chirko.transactionprocessing.utils.DatetimePair;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.Positive;
+import lombok.Builder;
 
 import java.math.BigDecimal;
 
+@Builder
 public record TransactionProcessingRequestDto(
         @JsonProperty("account_from")
         int accountFrom,

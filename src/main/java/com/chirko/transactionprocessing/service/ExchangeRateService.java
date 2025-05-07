@@ -17,10 +17,10 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Stream;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 import static com.chirko.transactionprocessing.model.emuns.CurrencyShortname.*;
 
@@ -34,6 +34,9 @@ public class ExchangeRateService {
     private final String apiKey;
 
     private final String function = "FX_DAILY";
+
+    // 100 last days for compact and 200 for full
+    private final String outputsize = "compact"; // or full
 
     private final WebClient webClient;
 
@@ -90,11 +93,14 @@ public class ExchangeRateService {
     private void fetchLatestExchangeRateData() {
         logger.info("Fetching latest exchange rate data");
 
-        final List<ExchangeRate> rates = Stream.of(getRates(KZT, USD), getRates(RUB, USD))
-                .flatMap(Collection::stream)
-                .toList();
+        final double blockingFactor = 0.5;
+        final int availableProcessors = Runtime.getRuntime().availableProcessors();
+        final int maximumPoolSize = (int) (availableProcessors / (1 - blockingFactor));
 
-        exchangeRateRepository.saveAll(rates);
+        List<Runnable> tasks = List.of(() -> fetchRates(KZT, USD), () -> fetchRates(RUB, USD));
+
+        Executor executor = Executors.newFixedThreadPool(Math.max(maximumPoolSize, tasks.size()));
+        tasks.forEach(executor::execute);
 
         if (!isFetchedAfterStartup) {
             synchronized (ExchangeRateService.class) {
@@ -105,7 +111,7 @@ public class ExchangeRateService {
         }
     }
 
-    private List<ExchangeRate> getRates(CurrencyShortname base, CurrencyShortname target) {
+    private void fetchRates(CurrencyShortname base, CurrencyShortname target) {
         logger.info("Processing GET request with param: base currency: {}, target currency: {}", base, target);
 
         final ForexData forexData = Optional.ofNullable(webClient.get()
@@ -113,18 +119,20 @@ public class ExchangeRateService {
                                 .queryParam("function", function)
                                 .queryParam("from_symbol", base)
                                 .queryParam("to_symbol", target)
+                                .queryParam("outputsize", outputsize)
                                 .queryParam("apikey", apiKey)
                                 .build())
                         .retrieve()
                         .bodyToMono(ForexData.class)
                         .block())
                 .orElseThrow(() -> {
-                    logger.error("No exchange rate data available for base: {}, target: {}", base, target);
-                    return new RuntimeException(
-                            String.format("No exchange rate data available for base: %s, target: %s", base, target));
+                    final String message =
+                            String.format("No exchange rate data available for base: %s, target: %s", base, target);
+                    logger.error(message);
+                    return new RuntimeException(message); //throws RuntimeException to provoke transaction rollback
                 });
 
-        return forexData.timeSeries().entrySet().stream()
+        final List<ExchangeRate> rates = forexData.timeSeries().entrySet().stream()
                 .map(dateDailyDataEntry -> ExchangeRate.builder()
                         .exchangeRateId(ExchangeRateId.builder()
                                 .base(base)
@@ -134,5 +142,7 @@ public class ExchangeRateService {
                         .rate(dateDailyDataEntry.getValue().close())
                         .build())
                 .toList();
+
+        exchangeRateRepository.saveAll(rates);
     }
 }
