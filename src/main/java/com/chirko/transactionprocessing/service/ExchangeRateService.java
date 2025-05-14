@@ -6,12 +6,18 @@ import com.chirko.transactionprocessing.exception.TransactionProcessingException
 import com.chirko.transactionprocessing.model.cassandra.ExchangeRate;
 import com.chirko.transactionprocessing.model.cassandra.ExchangeRateId;
 import com.chirko.transactionprocessing.model.emuns.CurrencyShortname;
+import com.chirko.transactionprocessing.model.postgres.ExchangeRateServiceMetadata;
 import com.chirko.transactionprocessing.repository.cassandra.ExchangeRateRepository;
+import com.chirko.transactionprocessing.repository.postgres.ExchangeRateServiceMetadataRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
@@ -29,8 +35,6 @@ public class ExchangeRateService {
 
     private final Logger logger = LoggerFactory.getLogger(ExchangeRateService.class);
 
-    private static volatile boolean isFetchedAfterStartup = false;
-
     private final String apiKey;
 
     private final String function = "FX_DAILY";
@@ -42,13 +46,26 @@ public class ExchangeRateService {
 
     private final ExchangeRateRepository exchangeRateRepository;
 
+    private final ExchangeRateServiceMetadataRepository exchangeRateServiceMetadataRepository;
+
     public ExchangeRateService(
             @Value("${exchange.rate.service.provider.base-url}") String baseUrl,
             @Value("${exchange.rate.service.provider.api-key}") String apiKey,
-            ExchangeRateRepository exchangeRateRepository) {
+            ExchangeRateRepository exchangeRateRepository,
+            ExchangeRateServiceMetadataRepository exchangeRateServiceMetadataRepository) {
         this.apiKey = apiKey;
         this.webClient = WebClient.builder().baseUrl(baseUrl).build();
         this.exchangeRateRepository = exchangeRateRepository;
+        this.exchangeRateServiceMetadataRepository = exchangeRateServiceMetadataRepository;
+    }
+
+    @EventListener(ContextRefreshedEvent.class)
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    void doOnStartup() {
+        final LocalDate date = getDate();
+        if (exchangeRateServiceMetadataRepository.findById(date).isEmpty()) {
+            fetchLatestExchangeRateData();
+        }
     }
 
     public BigDecimal getExchangeRate(CurrencyShortname base, CurrencyShortname target)
@@ -57,15 +74,7 @@ public class ExchangeRateService {
             return BigDecimal.ONE;
         }
 
-        final LocalDate now = LocalDate.now();
-
-        final LocalDate date = switch (now.getDayOfWeek()) {
-            case SATURDAY -> now.minusDays(1);
-            case SUNDAY -> now.minusDays(2);
-            default -> LocalTime.now().isBefore(LocalTime.of(13, 10))
-                    ? now.minusDays(1)
-                    : now;
-        };
+        final LocalDate date = getDate();
 
         final ExchangeRateId id = ExchangeRateId.builder()
                 .base(base)
@@ -73,15 +82,11 @@ public class ExchangeRateService {
                 .date(date)
                 .build();
 
-        if (!isFetchedAfterStartup) {
-            synchronized (ExchangeRateService.class) {
-                if (!isFetchedAfterStartup) {
-                    fetchLatestExchangeRateData();
-                }
-            }
-        }
-
         return exchangeRateRepository.findById(id)
+                // That throwing can be omitted if you use API that can return rate for certain date like
+                // https://api.freecurrencyapi.com/v1/historical
+                // API docs:
+                // https://freecurrencyapi.com/docs/historical#historical-exchange-rates
                 .orElseThrow(() -> new TransactionProcessingException(ErrorCode.INTERNAL_SERVICE_ERROR,
                         String.format("No Cached exchange rate data for base: %s, target: %s; on: %s",
                                 base, target, date)))
@@ -89,8 +94,10 @@ public class ExchangeRateService {
     }
 
     // At 13:10 every day between Monday and Friday inclusive
+    // And on startup if fetching is needed today at current time
     @Scheduled(cron = "0 10 13 * * MON-FRI", zone = "${scheduler.service.zone}")
-    private void fetchLatestExchangeRateData() {
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    protected void fetchLatestExchangeRateData() {
         logger.info("Fetching latest exchange rate data");
 
         final double blockingFactor = 0.5;
@@ -102,13 +109,18 @@ public class ExchangeRateService {
         Executor executor = Executors.newFixedThreadPool(Math.max(maximumPoolSize, tasks.size()));
         tasks.forEach(executor::execute);
 
-        if (!isFetchedAfterStartup) {
-            synchronized (ExchangeRateService.class) {
-                if (!isFetchedAfterStartup) {
-                    isFetchedAfterStartup = true;
-                }
-            }
-        }
+        exchangeRateServiceMetadataRepository.save(new ExchangeRateServiceMetadata(getDate()));
+    }
+
+    private LocalDate getDate() {
+        final LocalDate now = LocalDate.now();
+        return switch (now.getDayOfWeek()) {
+            case SATURDAY -> now.minusDays(1);
+            case SUNDAY -> now.minusDays(2);
+            default -> LocalTime.now().isBefore(LocalTime.of(13, 10))
+                    ? now.minusDays(1)
+                    : now;
+        };
     }
 
     private void fetchRates(CurrencyShortname base, CurrencyShortname target) {
@@ -129,7 +141,7 @@ public class ExchangeRateService {
                     final String message =
                             String.format("No exchange rate data available for base: %s, target: %s", base, target);
                     logger.error(message);
-                    return new RuntimeException(message); //throws RuntimeException to provoke transaction rollback
+                    return new RuntimeException(message); // throws RuntimeException to provoke transaction rollback
                 });
 
         final List<ExchangeRate> rates = forexData.timeSeries().entrySet().stream()
@@ -141,6 +153,7 @@ public class ExchangeRateService {
                                 .build())
                         .rate(dateDailyDataEntry.getValue().close())
                         .build())
+                .filter(rate -> !exchangeRateRepository.existsById(rate.exchangeRateId()))
                 .toList();
 
         exchangeRateRepository.saveAll(rates);
